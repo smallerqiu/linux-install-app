@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# 自动编译安装 unhide (兼容 AlmaLinux / CentOS 7/8/9)
+# 自动编译安装 unhide (支持 AlmaLinux / CentOS / RHEL / Debian / Ubuntu)
 # 作者: Qiu @ INFINNI
 # 更新时间: 2025-10-29
 #
@@ -22,22 +22,45 @@ else
     exit 1
 fi
 
+# 检测包管理器
 PKG_TOOL=""
 if command -v dnf >/dev/null 2>&1; then
     PKG_TOOL="dnf"
 elif command -v yum >/dev/null 2>&1; then
     PKG_TOOL="yum"
+elif command -v apt-get >/dev/null 2>&1; then
+    PKG_TOOL="apt"
 else
-    echo "❌ 未找到 yum/dnf，请手动安装依赖"
+    echo "❌ 未检测到受支持的包管理器 (dnf/yum/apt)"
     exit 1
 fi
 
-echo "========== 安装依赖 =========="
-sudo $PKG_TOOL install -y git gcc make glibc-devel net-tools lsof || true
+echo "========== 安装编译环境 =========="
+if [[ "$ID" =~ (almalinux|centos|rhel|rocky) ]]; then
+    # 启用 powertools 或 crb 仓库
+    if [[ "$VERSION_ID" =~ ^8 ]]; then
+        sudo dnf config-manager --set-enabled powertools || true
+    elif [[ "$VERSION_ID" =~ ^9 ]]; then
+        sudo dnf config-manager --set-enabled crb || true
+    fi
 
-# 检查 glibc-static
-if [ ! -f /usr/lib64/libc.a ]; then
-    echo "⚠️ 检测到系统缺少 /usr/lib64/libc.a (glibc-static)，将跳过静态编译"
+    sudo $PKG_TOOL clean all && sudo $PKG_TOOL makecache
+
+    # 安装完整编译环境和依赖
+    sudo $PKG_TOOL groupinstall -y "Development Tools" || true
+    sudo $PKG_TOOL install -y git gcc make glibc-devel glibc-static libpcap-devel net-tools lsof || true
+
+elif [[ "$ID" =~ (debian|ubuntu) ]]; then
+    sudo apt-get update
+    sudo apt-get install -y build-essential git gcc make libc6-dev libpthread-stubs0-dev net-tools lsof || true
+else
+    echo "⚠️ 未知系统类型: $ID，尝试安装基础依赖"
+    sudo $PKG_TOOL install -y git gcc make glibc-devel net-tools lsof || true
+fi
+
+# 检查静态库
+if [ ! -f /usr/lib64/libc.a ] && [ ! -f /usr/lib/x86_64-linux-gnu/libc.a ]; then
+    echo "⚠️ 未找到 libc.a，将使用动态编译"
     USE_STATIC=false
 else
     USE_STATIC=true
@@ -57,19 +80,20 @@ echo "========== 开始编译 =========="
 if $USE_STATIC; then
     echo "尝试静态编译..."
     set +e
-    sudo ./build_all.sh
+    sudo gcc -Wall -Wextra -O2 -static -pthread unhide-linux*.c unhide-output.c -o unhide-linux 2>/dev/null
+    sudo gcc -Wall -Wextra -O2 -static unhide-tcp*.c unhide-output.c -o unhide-tcp 2>/dev/null
     STATUS=$?
     set -e
 
     if [ $STATUS -ne 0 ]; then
-        echo "⚠️ 静态编译失败，自动切换到动态编译模式..."
-        sudo sed -i 's/-static//g' Makefile
-        sudo ./build_all.sh
+        echo "⚠️ 静态编译失败，自动切换到动态模式..."
+        sudo gcc -Wall -Wextra -O2 -pthread unhide-linux*.c unhide-output.c -o unhide-linux
+        sudo gcc -Wall -Wextra -O2 unhide-tcp*.c unhide-output.c -o unhide-tcp
     fi
 else
     echo "使用动态编译模式..."
-    sudo sed -i 's/-static//g' Makefile
-    sudo ./build_all.sh
+    sudo gcc -Wall -Wextra -O2 -pthread unhide-linux*.c unhide-output.c -o unhide-linux
+    sudo gcc -Wall -Wextra -O2 unhide-tcp*.c unhide-output.c -o unhide-tcp
 fi
 
 echo "========== 安装可执行文件 =========="
@@ -85,8 +109,8 @@ if command -v unhide >/dev/null 2>&1; then
     echo "✅ Unhide 安装成功"
     unhide --version || echo "unhide 版本检测完成"
 else
-    echo "❌ 安装失败，请检查日志: $LOGFILE"
+    echo "❌ 安装失败，请查看日志: $LOGFILE"
     exit 1
 fi
 
-echo "✅ 全部完成！日志已保存至 $LOGFILE"
+echo "✅ 全部完成！日志文件: $LOGFILE"
