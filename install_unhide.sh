@@ -32,6 +32,16 @@ else
     sudo yum install -y git gcc make glibc-devel net-tools lsof || true
 fi
 
+# 检查 glibc-static 是否存在
+if ! rpm -q glibc-static >/dev/null 2>&1; then
+    echo "========== 检测到未安装 glibc-static，尝试安装 =========="
+    sudo $PKG_TOOL install -y glibc-static || {
+        echo "⚠️ 无法安装 glibc-static，稍后将尝试动态编译"
+    }
+else
+    echo "✅ glibc-static 已安装"
+fi
+
 echo "========== 获取源码 =========="
 if [ -d "$UNHIDE_SRC_DIR" ]; then
     echo "已有 Unhide 目录，更新中..."
